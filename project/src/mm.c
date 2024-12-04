@@ -79,37 +79,43 @@ int pte_set_fpn(uint32_t *pte, int fpn)
 /* 
  * vmap_page_range - map a range of page at aligned address
  */
-int vmap_page_range(struct pcb_t *caller, // process call
-                                int addr, // start address which is aligned to pagesz
-                               int pgnum, // num of mapping page
-           struct framephy_struct *frames,// list of the mapped frames
-              struct vm_rg_struct *ret_rg)// return mapped region, the real mapped fp
-{                                         // no guarantee all given pages are mapped
-  //uint32_t * pte = malloc(sizeof(uint32_t));
-  struct framephy_struct *fpit = malloc(sizeof(struct framephy_struct));
-  //int  fpn;
-  int pgit = 0;
-  int pgn = PAGING_PGN(addr);
+int vmap_page_range(struct pcb_t *caller, 
+                    int addr, 
+                    int pgnum, 
+                    struct framephy_struct *frames, 
+                    struct vm_rg_struct *ret_rg)
+{
+    struct framephy_struct *fpit;
+    int pgit;
+    int pgn;
 
-  /* TODO: update the rg_end and rg_start of ret_rg 
-  //ret_rg->rg_end =  ....
-  //ret_rg->rg_start = ...
-  //ret_rg->vmaid = ...
-  */
+    ret_rg->rg_end = ret_rg->rg_start = addr; // at least the first available space
 
-  fpit->fp_next = frames;
+    fpit = frames;
+    for (pgit = 0; pgit < pgnum; pgit++) {
+        pgn = (addr + pgit * PAGING_PAGESZ) / PAGING_PAGESZ;
+        uint32_t *pte = &caller->mm->pgd[pgn];
 
-  /* TODO map range of frame to address space 
-   *      in page table pgd in caller->mm
-   */
+        // Set the frame number (FPN) for the corresponding page
+        pte_set_fpn(pte, fpit->fpn);
 
-   /* Tracking for later page replacement activities (if needed)
-    * Enqueue new usage page */
-   enlist_pgn_node(&caller->mm->fifo_pgn, pgn+pgit);
+        // Move to the next frame in the list
+        struct framephy_struct *tmp = fpit;
+        fpit = fpit->fp_next;
+        free(tmp);  // Free the frame as it is now used
+    }
 
+    // List the pages in the page table
+    for (pgit = pgnum - 1; pgit >= 0; pgit--) {
+        pgn = (addr + pgit * PAGING_PAGESZ) / PAGING_PAGESZ;
+        enlist_pgn_node(&caller->mm->fifo_pgn, pgn);
+    }
 
-  return 0;
+    return 0;
 }
+
+
+
 
 /* 
  * alloc_pages_range - allocate req_pgnum of frame in ram
@@ -120,25 +126,37 @@ int vmap_page_range(struct pcb_t *caller, // process call
 
 int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struct** frm_lst)
 {
-  int pgit, fpn;
-  //struct framephy_struct *newfp_str;
+    int pgit, fpn;
 
+    for (pgit = 0; pgit < req_pgnum; pgit++) {
+        struct framephy_struct *new_fp = malloc(sizeof(struct framephy_struct));
+        if (MEMPHY_get_freefp(caller->mram, &fpn) != 0) {
+            // No available frames, choose a victim page to swap out
+            int vicpgn;
+            find_victim_page(caller->mm, &vicpgn);
+            uint32_t vic_pte = caller->mm->pgd[vicpgn];
+            int vicfpn = PAGING_FPN(vic_pte);
 
-  /* TODO: allocate the page 
-  //caller-> ...
-  //frm_lst-> ...
-  */
-  for(pgit = 0; pgit < req_pgnum; pgit++)
-  {
-    if(MEMPHY_get_freefp(caller->mram, &fpn) == 0)
-   {
-     
-   } else {  // ERROR CODE of obtaining somes but not enough frames
-   } 
- }
+            // Swap the page from RAM to swap
+            int swpfpn;
+            MEMPHY_get_freefp(caller->active_mswp, &swpfpn);
+            __swap_cp_page(caller->mram, vicfpn, caller->active_mswp, swpfpn);
+            pte_set_swap(&caller->mm->pgd[vicpgn], 0, swpfpn);
 
-  return 0;
+            // Reset the frame to the victim's FPN
+            fpn = vicfpn;
+        }
+
+        // Create a new frame and add it to the list
+        new_fp->fpn = fpn;
+        new_fp->fp_next = *frm_lst;
+        *frm_lst = new_fp;
+    }
+
+    return 0;
 }
+
+
 
 
 /* 
@@ -214,40 +232,58 @@ int __swap_cp_page(struct memphy_struct *mpsrc, int srcfpn,
  */
 int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 {
-  struct vm_area_struct * vma0 = malloc(sizeof(struct vm_area_struct));
-  struct vm_area_struct * vma1 = malloc(sizeof(struct vm_area_struct));
+  // Khởi tạo hai vùng nhớ ảo (VMA) mặc định: một cho DATA và một cho HEAP.
+  struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
+  struct vm_area_struct *vma1 = malloc(sizeof(struct vm_area_struct));
 
-  mm->pgd = malloc(PAGING_MAX_PGN*sizeof(uint32_t));
+  // Khởi tạo bảng trang cho tiến trình
+  mm->pgd = malloc(PAGING_MAX_PGN * sizeof(uint32_t));
 
-  /* By default the owner comes with at least one vma for DATA */
+  /* Khởi tạo VMA0 cho vùng dữ liệu */
   vma0->vm_id = 0;
-  vma0->vm_start = 0;
-  vma0->vm_end = vma0->vm_start;
-  vma0->sbrk = vma0->vm_start;
+  vma0->vm_start = 0;          // Bắt đầu từ địa chỉ 0
+  vma0->vm_end = vma0->vm_start; // Kết thúc tại vm_start ban đầu
+  vma0->sbrk = vma0->vm_start;  // Điểm bắt đầu của heap
+
+  // Khởi tạo và thêm vùng nhớ tự do đầu tiên vào VMA0
   struct vm_rg_struct *first_rg = init_vm_rg(vma0->vm_start, vma0->vm_end, 0);
   enlist_vm_rg_node(&vma0->vm_freerg_list, first_rg);
 
-  /* TODO update VMA0 next */
-  // vma0->next = ...
+  /* Thiết lập VMA1 cho vùng HEAP */
+  vma1->vm_id = 1;
+  vma1->vm_start = caller->vmemsz;; // Bắt đầu ngay tại vmemsz
+  vma1->vm_end = vma1->vm_start;     // Kết thúc tại vm_start ban đầu
+  vma1->sbrk = vma1->vm_start;       // Thiết lập sbrk
 
-  /* TODO: update one vma for HEAP */
-  // vma1->vm_id = ...
-  // vma1->vm_start = ...
-  // vma1->vm_end = ...
-  // vma1->sbrk = ...
-  // enlist_vm_rg_node(&vma1...)
-  // vma1->vm_next
-  // enlist_vm_rg_node(&vma1->vm_freerg_list,...)
+  // Thêm vùng nhớ tự do đầu tiên vào VMA1
+  struct vm_rg_struct *second_rg = init_vm_rg(vma1->vm_start, vma1->vm_end, 1);
+  enlist_vm_rg_node(&vma1->vm_freerg_list, second_rg);
 
-  /* Point vma owner backward */
-  vma0->vm_mm = mm; 
+  /* Liên kết VMA0 và VMA1 */
+  vma0->vm_next = vma1;
+  vma1->vm_next = NULL; 
+
+  /* Chỉ định chủ sở hữu của các VMA là mm */
+  vma0->vm_mm = mm;
   vma1->vm_mm = mm;
 
-  /* TODO: update mmap */
-  //mm->mmap = ...
+  /* Thiết lập danh sách mmap của mm để trỏ đến VMA0 */
+  mm->mmap = vma0;
+  
+  // /* Thiết lập bảng ký hiệu trống */
+  // for (int i = 0; i < PAGING_MAX_SYMTBL_SZ; i++) {
+  //   mm->symrgtbl[i].rg_start = -1;
+  //   mm->symrgtbl[i].rg_end = -1;
+  //   mm->symrgtbl[i].vmaid = -1;
+  // }
+  
+  /* Thiết lập danh sách trang trống */
+  mm->fifo_pgn = NULL;
 
   return 0;
 }
+
+
 
 struct vm_rg_struct* init_vm_rg(int rg_start, int rg_end, int vmaid)
 {

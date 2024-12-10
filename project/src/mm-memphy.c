@@ -76,11 +76,8 @@ int MEMPHY_read(struct memphy_struct *mp, int addr, BYTE *value)
 int MEMPHY_seq_write(struct memphy_struct *mp, int addr, BYTE value)
 {
 
-   if (mp == NULL)
+   if (mp == NULL || !mp->rdmflg)
       return -1;
-
-   if (!mp->rdmflg)
-      return -1; /* Not compatible mode for sequential read */
 
    MEMPHY_mv_csr(mp, addr);
    mp->storage[addr] = value;
@@ -125,6 +122,9 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
    fst = malloc(sizeof(struct framephy_struct));
    fst->fpn = iter;
    mp->free_fp_list = fst;
+   mp->used_fp_list=malloc(sizeof(struct framephy_struct));
+   mp->used_fp_list->fpn=-1;
+   mp->used_fp_list->fp_next=NULL;
 
    /* We have list with first element, fill in the rest num-1 element member*/
    for (iter = 1; iter < numfp; iter++)
@@ -159,13 +159,36 @@ int MEMPHY_get_freefp(struct memphy_struct *mp, int *retfpn)
 
 int MEMPHY_dump(struct memphy_struct *mp)
 {
-    /*TODO dump memphy contnt mp->storage 
-     *     for tracing the memory content
-     */
-    printf("----------------MEMORY CONTENT-------------- \n");
-    printf("Address: Content \n");
-    for (int i = 0; i < mp->maxsz; i++)
-      if (mp->storage[i]) printf("0x%08x: %08x \n", i, mp->storage[i]);
+    printf("----------------MEMPHY DUMP--------------\n");
+    // Duyệt qua các khung bộ nhớ (frames) trong used_fp_list
+    struct framephy_struct *fp = mp->used_fp_list;
+    while (fp != NULL) {
+        int fpn = fp->fpn;
+        
+        if (fpn == -1) {
+            fp = fp->fp_next;
+            continue;
+        }
+
+        // Duyệt qua tất cả các vị trí trong khung bộ nhớ và in ra các địa chỉ có giá trị khác 0
+        for (int iter = 0; iter < PAGING_PAGESZ; iter++) {
+            int phyaddr = (fpn << PAGING_ADDR_FPN_LOBIT) + iter;
+            if (mp->storage[phyaddr] != 0) {
+                printf("address 0x%08x: %d\n", phyaddr, mp->storage[phyaddr]);
+            }
+        }
+        
+        fp = fp->fp_next;
+    }
+
+    // Duyệt qua toàn bộ bộ nhớ (storage) và in ra các địa chỉ có giá trị khác 0
+    for (int i = 0; i < mp->maxsz; i++) {
+        if (mp->storage[i] != 0) {
+            printf("0x%08x: %08x \n", i, mp->storage[i]);
+        }
+    }
+
+    printf("-----------------------------------------\n");
     return 0;
 }
 

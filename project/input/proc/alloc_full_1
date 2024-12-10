@@ -1,5 +1,5 @@
 0 9
-alloc 300 0
+malloc 300 0
 alloc 300 1
 alloc 400 2
 address 0

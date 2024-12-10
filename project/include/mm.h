@@ -2,7 +2,7 @@
 
 #include "bitops.h"
 #include "common.h"
-
+#include <pthread.h>
 /* CPU Bus definition */
 #define PAGING_CPU_BUS_WIDTH 22 /* 22bit bus - MAX SPACE 4MB */
 #define PAGING_PAGESZ  256      /* 256B or 8-bits PAGE NUMBER */
@@ -145,7 +145,7 @@ int pgwrite(
 struct vm_rg_struct * get_symrg_byid(struct mm_struct* mm, int rgid);
 int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, int vmastart, int vmaend);
 int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg);
-int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz);
+int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz, int* inc_limit_ret);
 int find_victim_page(struct mm_struct* mm, int *pgn);
 struct vm_area_struct *get_vma_by_num(struct mm_struct *mm, int vmaid);
 
@@ -167,5 +167,7 @@ int print_list_vma(struct vm_area_struct *rg);
 
 int print_list_pgn(struct pgn_t *ip);
 int print_pgtbl(struct pcb_t *ip, uint32_t start, uint32_t end);
+
+int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller);
 
 #endif

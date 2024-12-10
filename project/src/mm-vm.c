@@ -10,6 +10,32 @@
 #include <stdio.h>
 #include <pthread.h>
 
+
+int checkAddress(struct mm_struct *mm, int addr) {
+    int include = 0;
+    struct vm_area_struct *pvma = mm->mmap;
+
+    if (mm->mmap == NULL)
+        return 0;
+
+    while (pvma != NULL) {
+        if (pvma->vm_id == 0) {  // vmaid == 0
+            if (addr >= pvma->vm_start && addr <= pvma->sbrk) {
+                include = 1;
+                break;
+            }
+        } else {  // vmaid != 0
+            if (addr <= pvma->vm_start && addr >= pvma->sbrk) {
+                include = 1;
+                break;
+            }
+        }
+        pvma = pvma->vm_next;
+    }
+    return !include;
+}
+
+
 /*enlist_vm_freerg_list - add new rg to freerg_list
  *@mm: memory region
  *@rg_elmt: new region
@@ -78,51 +104,75 @@ struct vm_rg_struct *get_symrg_byid(struct mm_struct *mm, int rgid)
  *@alloc_addr: address of allocated memory region
  *
  */
-int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr)
-{
+int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr) {
+    // Kiểm tra nếu vùng đã được cấp phát
+    if (caller->mm->symrgtbl[rgid].rg_start != caller->mm->symrgtbl[rgid].rg_end) {
+      return -1;
+    }
 
-  /*Allocate at the toproof */
-  struct vm_rg_struct rgnode;
+    struct vm_rg_struct rgnode;
+    rgnode.vmaid = vmaid;
 
-  if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0)
-  {
-    caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
-    caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
+    // Thử tìm vùng trống trong danh sách vùng nhớ
+    if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0) {
+      // Gán vùng nhớ vào bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
+      caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
+      caller->mm->symrgtbl[rgid].vmaid = rgnode.vmaid;
 
-    *alloc_addr = rgnode.rg_start;
+      // Khởi tạo giá trị mặc định trong vùng nhớ
+      for (int addr = rgnode.rg_start; addr < rgnode.rg_end; addr++) {
+          pg_setval(caller->mm, addr, '\0', caller);
+      }
+
+      *alloc_addr = rgnode.rg_start;
+      return 0;
+    }
+
+    // Nếu không tìm thấy vùng trống, mở rộng giới hạn vma
+    struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+    if (!cur_vma) {
+      return -1;  
+    }
+
+    int old_sbrk = cur_vma->sbrk;
+    int inc_limit_ret = 0;
+
+    if (vmaid == 0) {  // Vùng nhớ DATA/STACK
+      if (old_sbrk + size > cur_vma->vm_end) {
+        if (inc_vma_limit(caller, vmaid, size, &inc_limit_ret) < 0) {
+          return -1;
+        }
+      }
+
+      // Cập nhật bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
+      caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
+      cur_vma->sbrk = old_sbrk + size;
+    } else {  // Vùng nhớ HEAP
+      if (old_sbrk - size < cur_vma->vm_end) {
+        if (inc_vma_limit(caller, vmaid, size, &inc_limit_ret) < 0) {
+          return -1;
+        }
+      }
+
+      // Cập nhật bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
+      caller->mm->symrgtbl[rgid].rg_end = old_sbrk - size;
+      cur_vma->sbrk = old_sbrk - size;
+    }
+
+    caller->mm->symrgtbl[rgid].vmaid = vmaid;
+
+    // Khởi tạo giá trị mặc định trong vùng nhớ
+    for (int addr = caller->mm->symrgtbl[rgid].rg_start;
+      addr != caller->mm->symrgtbl[rgid].rg_end;
+      addr += (vmaid == 0 ? 1 : -1)) {
+      pg_setval(caller->mm, addr, '\0', caller);
+    }
+
+    *alloc_addr = caller->mm->symrgtbl[rgid].rg_start;
     return 0;
-  }
-
-  /* TODO get_free_vmrg_area FAILED handle the region management (Fig.6)*/
-
-  /*Attempt to increate limit to get space */
-  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
-  int inc_sz = PAGING_PAGE_ALIGNSZ(size);
-  //int inc_limit_ret;
-  int old_sbrk;
-
-  old_sbrk = cur_vma->sbrk;
-
-  /* TODO INCREASE THE LIMIT
-   * inc_vma_limit(caller, vmaid, inc_sz)
-   */
-  inc_vma_limit(caller, vmaid, inc_sz);
-
-  /*Successful increase limit */
-  caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
-  caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
-
-  *alloc_addr = old_sbrk;
-
-  // Add remaining region to free list
-  if (old_sbrk + size < cur_vma->vm_end)
-  {
-    struct vm_rg_struct *rgnode = malloc(sizeof(struct vm_rg_struct));
-    rgnode->rg_start = old_sbrk + size;
-    rgnode->rg_end = cur_vma->vm_end;
-    enlist_vm_freerg_list(caller->mm, rgnode);
-  }
-  return 0;
 }
 
 /*__free - remove a region memory
@@ -447,17 +497,43 @@ struct vm_rg_struct* get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, in
  */
 int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, int vmastart, int vmaend)
 {
-  struct vm_area_struct *vma = caller->mm->mmap;
-
+    if (vmaid==0)
+    {
+        vmastart=vmastart+1;
+    }
+    else
+    {
+#ifdef MM_PAGING_HEAP_GODOWN
+        vmastart=vmastart-1;
+#endif
+    }
+    struct vm_area_struct *vma = caller->mm->mmap;
   /* TODO validate the planned memory area is not overlapped */
-  while(vma){
-    if(vma->vm_id  != vmaid && vma->vm_start < vmaend && vma->vm_end > vmastart)
-    return -1;
-    else vma=vma->vm_next;
-  }
-  /* END TODO*/
+    while (vma !=NULL )
+    {
+        if (vma->vm_id==vmaid)
+        {
+            vma=vma->vm_next;
+            continue;
+        }
+        if (vma->vm_end==vma->vm_start)
+        {
+            vma=vma->vm_next;
+            continue;
+        }
 
-  return 0;
+        if ((vmastart-(int)vma->vm_end>=0)&&(vmastart-(int)vma->vm_start<=0))
+            return -1;
+        if ((vmastart-(int)vma->vm_end<=0)&&(vmastart-(int)vma->vm_start>=0))
+            return -1;
+        if ((vmaend-(int)vma->vm_end>=0)&&(vmaend-(int)vma->vm_start<=0))
+            return -1;
+        if ((vmaend-(int)vma->vm_end<=0)&&(vmaend-(int)vma->vm_start>=0))
+            return -1;
+
+        vma=vma->vm_next;
+    }
+    return 0;
 }
 
 /*inc_vma_limit - increase vm area limits to reserve space for new variable
@@ -467,36 +543,67 @@ int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, int vmastart, int 
  *@inc_limit_ret: increment limit return
  *
  */
-int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz)
-{
-  struct vm_rg_struct * newrg = malloc(sizeof(struct vm_rg_struct));
-  int inc_amt = PAGING_PAGE_ALIGNSZ(inc_sz);
-  int incnumpage =  inc_amt / PAGING_PAGESZ;
+int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz, int* inc_limit_ret) {
+    struct vm_rg_struct *newrg = malloc(sizeof(struct vm_rg_struct));
+    newrg->vmaid = vmaid;
 
-  struct vm_rg_struct *area = get_vm_area_node_at_brk(caller, vmaid, inc_sz, inc_amt);
-  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
-  int old_end = cur_vma->vm_end;
+    struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+    int old_sbrk = cur_vma->sbrk;
+    int inc_amt;
 
-  /*Validate overlap of obtained region */
-  if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0)
-    return -1; /*Overlap and failed allocation */
+    // Xử lý vmaid == 0
+    if (vmaid == 0) {
+        if (cur_vma->vm_end == 0) {
+            old_sbrk = -1; // Nếu vm_end là 0, gán old_sbrk là -1
+        }
+        // Tính toán vm_end mới cho vmaid == 0
+        int new_vmaend = PAGING_PAGE_ALIGNSZ(old_sbrk + inc_sz) - 1;
+        inc_amt = PAGING_PAGE_ALIGNSZ(-cur_vma->vm_end + new_vmaend);
+    }
+    // Xử lý vmaid != 0 (có thể là heap, stack, v.v)
+    else {
+#ifdef MM_PAGING_HEAP_GODOWN
+        if (cur_vma->vm_end == caller->vmemsz - 1)
+            old_sbrk = caller->vmemsz;  // Nếu vm_end là cuối cùng của bộ nhớ, gán old_sbrk bằng vmemsz
+        int new_vmaend = ((old_sbrk - inc_sz) / PAGING_PAGESZ) * PAGING_PAGESZ;
+        inc_amt = PAGING_PAGE_ALIGNSZ(cur_vma->vm_end - new_vmaend);
+#endif
+    }
 
-  /* TODO: Obtain the new vm area based on vmaid */
-  //cur_vma->vm_end... 
-  // inc_limit_ret...
-  cur_vma->vm_end += inc_sz;
-  cur_vma->sbrk += inc_sz;
+    int incnumpage = inc_amt / PAGING_PAGESZ; // Tính số trang cần cấp phát
 
-  if (vm_map_ram(caller, area->rg_start, area->rg_end, 
-                    old_end, incnumpage , newrg) < 0)
-    return -1; /* Map the memory to MEMRAM */
+    struct vm_rg_struct *area = get_vm_area_node_at_brk(caller, vmaid, inc_sz, inc_amt);
+    int old_end = (int)cur_vma->vm_end;
 
-  // *inc_limit_ret = cur_vma->vm_end;
-  /*END TODO */
+    // Kiểm tra xem vùng bộ nhớ có bị chồng lấn không
+    if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0) {
+        free(newrg);
+        free(area);
+        return -1;  // Nếu có chồng lấn, trả về lỗi
+    }
 
-  return 0;
+    // Cập nhật vm_end và sbrk
+    if (vmaid == 0) {
+        cur_vma->vm_end = PAGING_PAGE_ALIGNSZ(old_sbrk + inc_sz) - 1;
+    } else {
+        cur_vma->vm_end = ((old_sbrk - inc_sz) / PAGING_PAGESZ) * PAGING_PAGESZ; // Điều chỉnh cho vùng heap
+    }
 
+    // Ánh xạ bộ nhớ mới vào RAM
+    if (vm_map_ram(caller, area->rg_start, area->rg_end, old_end, incnumpage, newrg) < 0) {
+        cur_vma->vm_end = old_end;  // Nếu ánh xạ thất bại, hoàn nguyên
+        free(area);
+        free(newrg);
+        return -1;
+    }
+
+    free(area);
+    free(newrg);
+
+    *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
+    return 0;
 }
+
 
 /*find_victim_page - find victim page
  *@caller: caller
@@ -547,7 +654,7 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
 
   struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
 
-  if (rgit == NULL)
+  if (rgit == NULL || cur_vma == NULL)
     return -1;
 
   /* Probe unintialized newrg */
@@ -556,15 +663,23 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
   /* Traverse on list of free vm region to find a fit space */
   while (rgit != NULL && rgit->vmaid == vmaid)
   {
-    if (rgit->rg_start + size <= rgit->rg_end)
+    if ((rgit->rg_start + size <= rgit->rg_end && vmaid == 0) || (rgit->rg_start - size >= rgit->rg_end && vmaid==1))
     { /* Current region has enough space */
       newrg->rg_start = rgit->rg_start;
-      newrg->rg_end = rgit->rg_start + size;
+      if (vmaid==0) {
+         newrg->rg_end = rgit->rg_start + size;
+      } else {
+         newrg->rg_end = rgit->rg_start - size;
+      }
 
       /* Update left space in chosen region */
-      if (rgit->rg_start + size < rgit->rg_end)
+      if (rgit->rg_start + size < rgit->rg_end && vmaid == 0)
       {
         rgit->rg_start = rgit->rg_start + size;
+      }
+      else if (rgit->rg_start-size > rgit->rg_end && vmaid == 1)
+      {
+        rgit->rg_start =rgit->rg_start - size;
       }
       else
       { /*Use up all space, remove current node */
@@ -594,7 +709,7 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
     }
   }
 
- if(newrg->rg_start == -1) // new region not found
+ if(newrg->rg_start == newrg->rg_end) // new region not found
    return -1;
 
  return 0;

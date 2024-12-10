@@ -238,6 +238,11 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 
   // Khởi tạo bảng trang cho tiến trình
   mm->pgd = malloc(PAGING_MAX_PGN * sizeof(uint32_t));
+  for (int i = 0; i < PAGING_MAX_SYMTBL_SZ; i++) {
+        mm->symrgtbl[i].rg_start = -1;
+        mm->symrgtbl[i].rg_end = -1;
+        mm->symrgtbl[i].vmaid = -1;
+  }
 
   /* Khởi tạo VMA0 cho vùng dữ liệu */
   vma0->vm_id = 0;
@@ -251,9 +256,11 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 
   /* Thiết lập VMA1 cho vùng HEAP */
   vma1->vm_id = 1;
-  vma1->vm_start = caller->vmemsz;; // Bắt đầu ngay tại vmemsz
-  vma1->vm_end = vma1->vm_start;     // Kết thúc tại vm_start ban đầu
-  vma1->sbrk = vma1->vm_start;       // Thiết lập sbrk
+#ifdef MM_PAGING_HEAP_GODOWN
+  vma1->vm_start = caller->vmemsz-1;
+  vma1->vm_end = vma1->vm_start;
+  vma1->sbrk = vma1->vm_start;
+#endif
 
   // Thêm vùng nhớ tự do đầu tiên vào VMA1
   struct vm_rg_struct *second_rg = init_vm_rg(vma1->vm_start, vma1->vm_end, 1);
@@ -282,8 +289,6 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 
   return 0;
 }
-
-
 
 struct vm_rg_struct* init_vm_rg(int rg_start, int rg_end, int vmaid)
 {
@@ -380,7 +385,7 @@ int print_list_pgn(struct pgn_t *ip)
 
 int print_pgtbl(struct pcb_t *caller, uint32_t start, uint32_t end)
 {
-  int pgn_start,pgn_end;
+  int pgn_start, pgn_end;
   int pgit;
 
   if(end == -1){
@@ -391,15 +396,40 @@ int print_pgtbl(struct pcb_t *caller, uint32_t start, uint32_t end)
   pgn_start = PAGING_PGN(start);
   pgn_end = PAGING_PGN(end);
 
-  printf("print_pgtbl: %d - %d", start, end);
+  printf("print_pgtbl for vmaid 0: %d - %d", start, end);
   if (caller == NULL) {printf("NULL caller\n"); return -1;}
     printf("\n");
 
-
-  for(pgit = pgn_start; pgit < pgn_end; pgit++)
+  if (end!=0)
   {
-     printf("%08ld: %08x\n", pgit * sizeof(uint32_t), caller->mm->pgd[pgit]);
+      for(pgit = pgn_start; pgit <= pgn_end; pgit++)
+      {
+          printf("%08ld: %08x\n", pgit * sizeof(uint32_t), caller->mm->pgd[pgit]);
+      }
   }
+
+#ifdef MM_PAGING_HEAP_GODOWN
+  uint32_t heap_end;
+  pgn_start = (caller->vmemsz -1) / PAGING_PAGESZ ;
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, 1);
+  heap_end = cur_vma->vm_end;
+
+  pgn_end = PAGING_PGN(heap_end) ;
+
+  printf("print_pgtbl for vmaid 1: %d - %d", heap_end, caller->vmemsz - 1);
+  if (caller == NULL)
+  {
+      return -1;
+  }
+  printf("\n");
+  if (heap_end != caller->vmemsz-1)
+  {
+      for(pgit = pgn_start; pgit >=pgn_end; pgit--)
+      {
+          printf("%08ld: %08x\n", pgit * sizeof(uint32_t), caller->mm->pgd[pgit]);
+      }
+  }
+#endif
 
   return 0;
 }

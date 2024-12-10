@@ -8,13 +8,13 @@ int statistic(struct pcb_t* proc, int rgid) {
 	if (proc == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ) {
 		return -1;
 	}
-	printf("Statistic ----------------------------\n");
-	struct mm_struct* mm=proc->mm;
-	struct vm_rg_struct region= mm->symrgtbl[rgid];
+	printf("Statistic --------------------------------\n");
+	struct mm_struct* mm = proc->mm;
+	struct vm_rg_struct region = mm->symrgtbl[rgid];
 	int count;
 
-	printf("rgid %d: rg_start %ld, rg_end %ld, vm_id %d\n", rgid,region.rg_start, region.rg_end,region.vmaid); 
-	struct vm_area_struct* cur_vma=mm->mmap;	
+	printf("rgid %d: rg_start %ld, rg_end %ld, vm_id %d\n", rgid, region.rg_start, region.rg_end, region.vmaid); 
+	struct vm_area_struct* cur_vma = mm->mmap;	
 	while (cur_vma != NULL) {
 		printf("vma%ld: vm_start %ld, vm_end %ld\n", cur_vma->vm_id, cur_vma->vm_start, cur_vma->vm_end);
 		struct vm_rg_struct * free_list=cur_vma->vm_freerg_list;

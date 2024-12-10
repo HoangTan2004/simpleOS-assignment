@@ -31,7 +31,8 @@ enum ins_opcode_t {
 #endif
 	FREE,	// Deallocated a memory block
 	READ,	// Write data to a byte on memory
-	WRITE	// Read data from a byte on memory
+	WRITE,	// Read data from a byte on memory
+	ADDRESS
 };
 
 /* instructions executed by the CPU */
@@ -91,6 +92,10 @@ struct pcb_t {
 	uint32_t bp;	// Break pointer
 
 };
+
+#ifdef MM_PAGING
+	int statistic (struct pcb_t* proc, int rgid);
+#endif
 
 #endif
 

@@ -1,0 +1,11 @@
+0 10
+alloc 200 1
+address 1
+malloc 300 3
+alloc 500 4
+free 4
+alloc 300 5
+write 120 5 10
+write 111 1 210
+read 1 10 4
+read 4 1002 2

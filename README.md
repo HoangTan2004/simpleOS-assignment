@@ -3,89 +3,34 @@
 
 
 
-/*__alloc - allocate a region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@size: allocated size 
- *@alloc_addr: address of allocated memory region
- *
- */
-int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr) {
-    // Kiểm tra nếu vùng đã được cấp phát
-    if (caller->mm->symrgtbl[rgid].rg_start != caller->mm->symrgtbl[rgid].rg_end) {
-      return -1;
-    }
-
-    struct vm_rg_struct rgnode;
-    rgnode.vmaid = vmaid;
-
-    // Thử tìm vùng trống trong danh sách vùng nhớ
-    if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0) {
-      // Gán vùng nhớ vào bảng ký hiệu
-      caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
-      caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
-      caller->mm->symrgtbl[rgid].vmaid = rgnode.vmaid;
-
-      // Khởi tạo giá trị mặc định trong vùng nhớ
-      for (int addr = rgnode.rg_start; addr < rgnode.rg_end; addr++) {
-          pg_setval(caller->mm, addr, '\0', caller);
-      }
-
-      *alloc_addr = rgnode.rg_start;
-      return 0;
-    }
-
-    // Nếu không tìm thấy vùng trống, mở rộng giới hạn vma
+int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg) {
     struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
     if (!cur_vma) {
-      return -1;  
-    }
-    
-    int old_sbrk = cur_vma->sbrk;
-    int new_sbrk = (vmaid == 0) ? old_sbrk + size : old_sbrk - size;
-    int inc_limit_ret = 0;
-    
-    if ((vmaid == 0 && new_sbrk > cur_vma->vm_end) || (vmaid != 0 && new_sbrk < cur_vma->vm_end)) {
-      if (inc_vma_limit(caller, vmaid, size, &inc_limit_ret) < 0) {
-          return -1;
-      }
-    }
-    
-    caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
-    caller->mm->symrgtbl[rgid].rg_end = new_sbrk;
-    caller->mm->symrgtbl[rgid].vmaid = rgnode.vmaid;
-    cur_vma->sbrk = new_sbrk;
-
-    // Khởi tạo giá trị mặc định trong vùng nhớ
-    for (int addr = old_sbrk; addr != new_sbrk; addr += (vmaid == 0 ? 1 : -1)) {
-      pg_setval(caller->mm, addr, '\0', caller);
+        return -1;  // Không tìm thấy VMA
     }
 
-    *alloc_addr = old_sbrk;
-    return 0;
-}
+    struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
+    while (rgit) {
+        // Kiểm tra nếu vùng đủ lớn
+        if ((rgit->rg_end - rgit->rg_start) >= size) {
+            newrg->rg_start = rgit->rg_start;
+            newrg->rg_end = rgit->rg_start + size;
+            newrg->vmaid = vmaid;
 
-/*__free - remove a region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@size: allocated size 
- *
- */
-int __free(struct pcb_t *caller, int rgid)
-{
-  struct vm_rg_struct *rgnode = malloc(sizeof(struct vm_rg_struct));
+            // Cập nhật lại danh sách vùng trống
+            if (rgit->rg_end == newrg->rg_end) {
+                // Nếu dùng hết vùng trống hiện tại, bỏ nút này khỏi danh sách
+                cur_vma->vm_freerg_list = rgit->rg_next;
+                free(rgit);
+            } else {
+                // Cập nhật vùng trống còn lại
+                rgit->rg_start += size;
+            }
 
-  if (rgid < 0 || rgid > PAGING_MAX_SYMTBL_SZ)
-    return -1;
+            return 0;
+        }
+        rgit = rgit->rg_next;
+    }
 
-  /* TODO: Manage the collect freed region to freerg_list */
-  rgnode->rg_start = caller->mm->symrgtbl[rgid].rg_start;
-  rgnode->rg_end = caller->mm->symrgtbl[rgid].rg_end;
-  rgnode->vmaid = caller->mm->symrgtbl[rgid].vmaid;
-  
-  //enlist_vm_freerg_list(caller->mm, rgnode);
-  memset(&caller->mm->symrgtbl[rgid], 0, sizeof(struct vm_rg_struct));
-  return 0;
+    return -1;  // Không tìm thấy vùng trống phù hợp
 }

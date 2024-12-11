@@ -1,102 +1,74 @@
 # <img src="https://upload.wikimedia.org/wikipedia/commons/f/f0/HCMCUT.svg" alt="HCMUT" width="23" /> simpleOS-assignment
 
-Time slot   0
-ld_routine
-	Loaded a process at input/proc/a1, PID: 1 PRIO: 0
-Time slot   1
-	CPU 0: Dispatched process  1
-Time slot   2
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 1: rg_start 0, rg_end 300, vmaid 0
-vma0: vm_start 0, vm_end 511
-Count free list: 0
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot   3
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Time slot   4
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 4: rg_start 300, rg_end 600, vmaid 0
-vma0: vm_start 0, vm_end 767
-Count free list: 0
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot   5
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Time slot   6
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 2: rg_start 600, rg_end 1000, vmaid 0
-vma0: vm_start 0, vm_end 1023
-Count free list: 0
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot   7
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Time slot   8
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 4: rg_start 300, rg_end 600, vmaid 0
-vma0: vm_start 0, vm_end 1023
-Count free list: 1
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot   9
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Time slot  10
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 1: rg_start 0, rg_end 300, vmaid 0
-vma0: vm_start 0, vm_end 1023
-Count free list: 2
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot  11
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Time slot  12
-	CPU 0: Put process  1 to run queue
-	CPU 0: Dispatched process  1
-Statistic system VMA---------------------
-rgid 3: rg_start 1000, rg_end 1400, vmaid 0
-vma0: vm_start 0, vm_end 1535
-Count free list: 2
-vma1: vm_start 2559, vm_end 2559
-Count free list: 0
------------------------------------------
-Time slot  13
-	CPU 0: Processed  1 has finished
-	CPU 0 stopped
 
+int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr) {
+    // Kiểm tra nếu vùng đã được cấp phát
+    if (caller->mm->symrgtbl[rgid].rg_start != caller->mm->symrgtbl[rgid].rg_end) {
+      return -1;
+    }
 
-0 12
-alloc 300 1
-dump 1
-alloc 300 4
-dump 4
-alloc 400 2
-dump 2
-free 4
-dump 4
-free 1
-dump 1
-alloc 400 3
-dump 3
-alloc 100 0	
-dump 0
+    struct vm_rg_struct rgnode;
+    rgnode.vmaid = vmaid;
+
+    // Thử tìm vùng trống trong danh sách vùng nhớ
+    if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0) {
+      // Gán vùng nhớ vào bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
+      caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
+      caller->mm->symrgtbl[rgid].vmaid = rgnode.vmaid;
+
+      // Khởi tạo giá trị mặc định trong vùng nhớ
+      for (int addr = rgnode.rg_start; addr < rgnode.rg_end; addr++) {
+          pg_setval(caller->mm, addr, '\0', caller);
+      }
+
+      *alloc_addr = rgnode.rg_start;
+      return 0;
+    }
+
+    // Nếu không tìm thấy vùng trống, mở rộng giới hạn vma
+    struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+    if (!cur_vma) {
+      return -1;  
+    }
+    
+    int inc_sz = PAGING_PAGE_ALIGNSZ(size);
+    int old_sbrk = cur_vma->sbrk;
+    int inc_limit_ret = 0;
+
+    if (vmaid == 0) {  // Vùng nhớ DATA/STACK
+      if (old_sbrk + size > cur_vma->vm_end) {
+        if (inc_vma_limit(caller, vmaid, size, &inc_limit_ret) < 0) {
+          return -1;
+        }
+      }
+
+      // Cập nhật bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
+      caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
+      cur_vma->sbrk = old_sbrk + size;
+    } else {  // Vùng nhớ HEAP
+      if (old_sbrk - size < cur_vma->vm_end) {
+        if (inc_vma_limit(caller, vmaid, size, &inc_limit_ret) < 0) {
+          return -1;
+        }
+      }
+
+      // Cập nhật bảng ký hiệu
+      caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
+      caller->mm->symrgtbl[rgid].rg_end = old_sbrk - size;
+      cur_vma->sbrk = old_sbrk - size;
+    }
+
+    caller->mm->symrgtbl[rgid].vmaid = vmaid;
+
+    // Khởi tạo giá trị mặc định trong vùng nhớ
+    for (int addr = caller->mm->symrgtbl[rgid].rg_start;
+      addr != caller->mm->symrgtbl[rgid].rg_end;
+      addr += (vmaid == 0 ? 1 : -1)) {
+      pg_setval(caller->mm, addr, '\0', caller);
+    }
+
+    *alloc_addr = caller->mm->symrgtbl[rgid].rg_start;
+    return 0;
+}

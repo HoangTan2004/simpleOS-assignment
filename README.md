@@ -3,34 +3,63 @@
 
 
 
-int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg) {
+int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz, int* inc_limit_ret) {
+    struct vm_rg_struct *newrg = malloc(sizeof(struct vm_rg_struct));
+    newrg->vmaid = vmaid;
+
     struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
-    if (!cur_vma) {
-        return -1;  // Không tìm thấy VMA
-    }
+    int old_sbrk = cur_vma->sbrk;
+    int inc_amt;
 
-    struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
-    while (rgit) {
-        // Kiểm tra nếu vùng đủ lớn
-        if ((rgit->rg_end - rgit->rg_start) >= size) {
-            newrg->rg_start = rgit->rg_start;
-            newrg->rg_end = rgit->rg_start + size;
-            newrg->vmaid = vmaid;
-
-            // Cập nhật lại danh sách vùng trống
-            if (rgit->rg_end == newrg->rg_end) {
-                // Nếu dùng hết vùng trống hiện tại, bỏ nút này khỏi danh sách
-                cur_vma->vm_freerg_list = rgit->rg_next;
-                free(rgit);
-            } else {
-                // Cập nhật vùng trống còn lại
-                rgit->rg_start += size;
-            }
-
-            return 0;
+    // Xử lý vmaid == 0
+    if (vmaid == 0) {
+        if (cur_vma->vm_end == 0) {
+            old_sbrk = -1; // Nếu vm_end là 0, gán old_sbrk là -1
         }
-        rgit = rgit->rg_next;
+        // Tính toán vm_end mới cho vmaid == 0
+        int new_vmaend = PAGING_PAGE_ALIGNSZ(old_sbrk + inc_sz) - 1;
+        inc_amt = PAGING_PAGE_ALIGNSZ(-cur_vma->vm_end + new_vmaend);
+    }
+    // Xử lý vmaid != 0 (có thể là heap, stack, v.v)
+    else {
+#ifdef MM_PAGING_HEAP_GODOWN
+        if (cur_vma->vm_end == caller->vmemsz - 1)
+            old_sbrk = caller->vmemsz;  // Nếu vm_end là cuối cùng của bộ nhớ, gán old_sbrk bằng vmemsz
+        int new_vmaend = ((old_sbrk - inc_sz) / PAGING_PAGESZ) * PAGING_PAGESZ;
+        inc_amt = PAGING_PAGE_ALIGNSZ(cur_vma->vm_end - new_vmaend);
+#endif
     }
 
-    return -1;  // Không tìm thấy vùng trống phù hợp
+    int incnumpage = inc_amt / PAGING_PAGESZ; // Tính số trang cần cấp phát
+
+    struct vm_rg_struct *area = get_vm_area_node_at_brk(caller, vmaid, inc_sz, inc_amt);
+    int old_end = (int)cur_vma->vm_end;
+
+    // Kiểm tra xem vùng bộ nhớ có bị chồng lấn không
+    if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0) {
+        free(newrg);
+        free(area);
+        return -1;  // Nếu có chồng lấn, trả về lỗi
+    }
+
+    // Cập nhật vm_end và sbrk
+    if (vmaid == 0) {
+        cur_vma->vm_end = PAGING_PAGE_ALIGNSZ(old_sbrk + inc_sz) - 1;
+    } else {
+        cur_vma->vm_end = ((old_sbrk - inc_sz) / PAGING_PAGESZ) * PAGING_PAGESZ; // Điều chỉnh cho vùng heap
+    }
+
+    // Ánh xạ bộ nhớ mới vào RAM
+    if (vm_map_ram(caller, area->rg_start, area->rg_end, old_end, incnumpage, newrg) < 0) {
+        cur_vma->vm_end = old_end;  // Nếu ánh xạ thất bại, hoàn nguyên
+        free(area);
+        free(newrg);
+        return -1;
+    }
+
+    free(area);
+    free(newrg);
+
+    *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
+    return 0;
 }

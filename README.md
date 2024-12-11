@@ -68,3 +68,43 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz, int *inc_limit_re
     *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
     return 0;
 }
+
+
+
+
+src/mm-vm.c:599:5: warning: data definition has no type or storage class
+  599 |     free(area);
+      |     ^~~~
+src/mm-vm.c:599:5: warning: type defaults to ‘int’ in declaration of ‘free’ [-Wimplicit-int]
+src/mm-vm.c:599:5: warning: parameter names (without types) in function declaration
+src/mm-vm.c:599:5: error: conflicting types for ‘free’; have ‘int()’
+In file included from src/mm-vm.c:9:
+/usr/include/stdlib.h:687:13: note: previous declaration of ‘free’ with type ‘void(void *)’
+  687 | extern void free (void *__ptr) __THROW;
+      |             ^~~~
+src/mm-vm.c:600:5: warning: data definition has no type or storage class
+  600 |     free(newrg);
+      |     ^~~~
+src/mm-vm.c:600:5: warning: type defaults to ‘int’ in declaration of ‘free’ [-Wimplicit-int]
+src/mm-vm.c:600:5: warning: parameter names (without types) in function declaration
+src/mm-vm.c:600:5: error: conflicting types for ‘free’; have ‘int()’
+/usr/include/stdlib.h:687:13: note: previous declaration of ‘free’ with type ‘void(void *)’
+  687 | extern void free (void *__ptr) __THROW;
+      |             ^~~~
+src/mm-vm.c:602:5: warning: data definition has no type or storage class
+  602 |     *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
+      |     ^
+src/mm-vm.c:602:6: warning: type defaults to ‘int’ in declaration of ‘inc_limit_ret’ [-Wimplicit-int]
+  602 |     *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
+      |      ^~~~~~~~~~~~~
+src/mm-vm.c:602:22: error: ‘inc_amt’ undeclared here (not in a function); did you mean ‘ino_t’?
+  602 |     *inc_limit_ret = inc_amt;  // Trả về kích thước bộ nhớ đã thay đổi
+      |                      ^~~~~~~
+      |                      ino_t
+src/mm-vm.c:603:5: error: expected identifier or ‘(’ before ‘return’
+  603 |     return 0;
+      |     ^~~~~~
+src/mm-vm.c:604:1: error: expected identifier or ‘(’ before ‘}’ token
+  604 | }
+      | ^
+make: *** [Makefile:41: obj/mm-vm.o] Error 1

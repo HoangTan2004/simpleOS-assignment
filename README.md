@@ -6,97 +6,48 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz, int *inc_limit_re
         return -1; // Không tìm thấy VMA
     }
 
-    struct vm_rg_struct *free_node = cur_vma->vm_freerg_list;
-    int found = 0;
-    int new_start = 0;
+    int old_sbrk = cur_vma->sbrk;
+    int new_sbrk = old_sbrk - inc_sz;
 
-    // Kiểm tra nếu có vùng trống phù hợp trong danh sách
-    while (free_node) {
-        if ((free_node->rg_start - inc_sz >= free_node->rg_end) && (vmaid != 0)) {
-            // Heap giảm: chọn vùng trống lớn hơn hoặc bằng yêu cầu
-            found = 1;
-            new_start = free_node->rg_start;
-            free_node->rg_start -= inc_sz; // Cập nhật vùng còn lại
-            break;
-        }
-        free_node = free_node->rg_next;
+    // Kiểm tra giới hạn
+    if (new_sbrk < cur_vma->vm_end) {
+        return -1; // Vượt quá giới hạn heap
     }
 
-    if (!found) {
-        // Nếu không tìm thấy vùng trống phù hợp, giảm `sbrk`
-        int old_sbrk = cur_vma->sbrk;
-
-        if (vmaid == 0) {
-            return -1; // Không hỗ trợ heap tăng trong trường hợp này
-        }
-
-#ifdef MM_PAGING_HEAP_GODOWN
-        int new_sbrk = old_sbrk - inc_sz;
-        if (new_sbrk < cur_vma->vm_end) {
-            return -1; // Vượt quá giới hạn heap
-        }
-
-        cur_vma->sbrk = new_sbrk; // Cập nhật `sbrk`
-        new_start = old_sbrk;    // Vùng mới bắt đầu từ `old_sbrk`
-#endif
-    }
-
+    // Cập nhật `sbrk` và `vm_end`
+    cur_vma->sbrk = new_sbrk;
     *inc_limit_ret = inc_sz;
-    return new_start;
+    return old_sbrk; // Trả về điểm bắt đầu cấp phát
 }
 
 
-int __free(struct pcb_t *caller, int rgid) {
-    if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ) {
-        return -1; // ID không hợp lệ
-    }
-
-    struct vm_rg_struct *rgnode = malloc(sizeof(struct vm_rg_struct));
-    if (!rgnode) {
-        return -1; // Lỗi cấp phát bộ nhớ
-    }
-
-    rgnode->rg_start = caller->mm->symrgtbl[rgid].rg_start;
-    rgnode->rg_end = caller->mm->symrgtbl[rgid].rg_end;
-
-    // Đặt lại bảng ký hiệu
-    caller->mm->symrgtbl[rgid].rg_start = -1;
-    caller->mm->symrgtbl[rgid].rg_end = -1;
-
-    // Thêm vùng giải phóng vào danh sách vùng trống
-    struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, rgnode->vmaid);
-    if (!cur_vma) {
-        free(rgnode);
-        return -1;
-    }
-
-    enlist_vm_rg_node(&cur_vma->vm_freerg_list, rgnode);
-    return 0;
-}
-
-
-int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr) {
-    if (caller->mm->symrgtbl[rgid].rg_start != caller->mm->symrgtbl[rgid].rg_end) {
-        return -1; // Vùng đã được cấp phát
-    }
-
+int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg) {
     struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
     if (!cur_vma) {
         return -1; // Không tìm thấy VMA
     }
 
-    int inc_limit_ret = 0;
-    int new_start = inc_vma_limit(caller, vmaid, size, &inc_limit_ret);
+    struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
 
-    if (new_start < 0) {
-        return -1; // Không thể cấp phát
+    while (rgit) {
+        if (rgit->rg_start - size >= rgit->rg_end) {
+            // Vùng trống đủ lớn
+            newrg->rg_start = rgit->rg_start;
+            newrg->rg_end = rgit->rg_start - size;
+
+            // Cập nhật vùng còn lại trong danh sách
+            rgit->rg_start -= size;
+            if (rgit->rg_start == rgit->rg_end) {
+                // Nếu vùng còn lại trống hoàn toàn, xóa nút khỏi danh sách
+                cur_vma->vm_freerg_list = rgit->rg_next;
+                free(rgit);
+            }
+
+            return 0; // Thành công
+        }
+
+        rgit = rgit->rg_next;
     }
 
-    // Gán vùng nhớ vào bảng ký hiệu
-    caller->mm->symrgtbl[rgid].rg_start = new_start;
-    caller->mm->symrgtbl[rgid].rg_end = new_start - size;
-    caller->mm->symrgtbl[rgid].vmaid = vmaid;
-
-    *alloc_addr = new_start;
-    return 0;
+    return -1; // Không tìm thấy vùng trống
 }
